@@ -1,0 +1,200 @@
+---
+title: "Problem Set3"
+author: "Yamato Igarashi (2125701)"
+format: pdf
+editor: visual
+pdf-engine: lualatex
+documentclass: ltjsarticle 
+---
+
+GitHub URL: https://github.com/yamato5810/MicroDataScience_Intermediate_ProblemSet3
+
+```{r, echo = FALSE, include = FALSE}
+Simulation_Data <- readr::read_csv(here::here("01_analysis", "output", "Simulation_Data.csv")) |>
+  dplyr::select(-1)
+```
+
+# 2. 分布の推定
+
+## a. ヒストグラム
+
+下記のグラフのように、ヒストグラムは、階級の幅を狭くすると滑らかな密度関数が描けず、幅を広くすると分布の形状を特定しづらくなる。
+
+```{r, echo = FALSE}
+make_histogram <- function(bin){
+  plot_data <- ggplot2::ggplot(data = Simulation_Data, ggplot2::aes(x = X)) +
+               ggplot2::geom_histogram(binwidth = bin) +
+               ggplot2::ggtitle(paste0("binwidth = ", bin)) +
+               ggplot2::labs(x = "X",
+                             y = "Frequency") +
+               ggplot2::theme_bw()
+  return(plot_data)
+}
+Histogram_10bin   <- make_histogram(bin = 10)
+Histogram_10bin
+Histogram_100bin  <- make_histogram(bin = 100)
+Histogram_100bin
+Histogram_1000bin <- make_histogram(bin = 1000)
+Histogram_1000bin
+```
+
+
+## b. カーネル密度
+
+下記のグラフのように、bandwidthを狭くすると形状が少しいびつになり、bandwidthを広くすると滑らかになりすぎる。
+
+```{r, echo = FALSE}
+make_kernel_density_plot <- function(adjust_bandwidth){
+  plot(density(Simulation_Data$X, adjust = adjust_bandwidth),
+                    xlim = c(-100,700), ylim = c(0, 0.05),
+                    main = paste0("bandwidth = ", adjust_bandwidth, "*default"))
+}
+make_kernel_density_plot(adjust_bandwidth =  1)
+make_kernel_density_plot(adjust_bandwidth =  0.2)
+make_kernel_density_plot(adjust_bandwidth =  5)
+
+```
+
+
+
+## c. 分位回帰
+
+以下は、線形回帰の結果である。
+
+```{r, echo = FALSE}
+estimatr::lm_robust(Z ~ X, data = Simulation_Data)
+```
+
+以下は、中央値の分位回帰の結果である。
+
+```{r, echo = FALSE}
+quantile_regression <- function(Tau){
+  quantreg::rq(Z ~ X, tau = Tau, data = Simulation_Data)
+}
+quantile_regression(0.5)
+```
+
+以下は、下位25%に関する分位回帰の結果である。
+
+```{r, echo = FALSE}
+quantile_regression(0.25)
+```
+
+以下は、上位25%に関する分位回帰の結果である。
+
+```{r, echo = FALSE}
+quantile_regression(0.75)
+```
+
+これらからわかるように、切片は上位25%,中央値≒平均値,下位25%の順に、小さくなっている。一方で、傾きはそれぞれの結果で大きな差は見受けられない。
+
+
+
+# 3. ⾮線形回帰 \[ボーナス\]
+
+## a.  プロビット回帰分析
+
+以下のようにProbitで推定すると、係数は0.245036となっており、真の値である1/4にほぼ等しい。
+
+```{r, echo = FALSE}
+Probit_marginal <- mfx::probitmfx(formula = Y ~ logX, data = Simulation_Data)
+Probit_marginal
+```
+
+一方、線形回帰では、0.1892428 と係数が小さく推定されている。
+
+```{r, echo = FALSE}
+OLS <- estimatr::lm_robust(Y ~ logX, data = Simulation_Data)
+OLS
+```
+
+これは、以下のグラフからもわかる通り、線形回帰の場合は外れ値に引っ張られ、傾きがより緩やかになっているからである。
+
+```{r, echo = FALSE}
+Probit <- glm(Y ~ logX, family = binomial(probit), data = Simulation_Data)
+Probit_predicted <- ggeffects::ggpredict(Probit, terms = "logX[all]", nsim = 100)
+
+ggplot2::ggplot(data = Simulation_Data)+
+  ggplot2::geom_point(ggplot2::aes(x = logX, y = Y)) +
+  ggplot2::geom_abline(intercept = OLS$coefficients[1],
+                       slope = OLS$coefficients[2], color = "red") +
+  ggplot2::geom_line(ggplot2::aes(x = x, y = predicted),
+                     data = Probit_predicted, color = "blue") +
+  ggplot2::labs(title = "3.a. Comparison between Probit and Linear Probability") +
+  ggplot2::theme_bw()
+```
+
+## b.  LASSO回帰分析
+
+下記のような分析結果が得られた。罰則項が大きい(lambda = 0.1)と、線形回帰での係数の値より小さく推定された。罰則項が小さいと、3.a.で求めた線形回帰の結果とほぼ等しい結果になった(Probitや真の値よりは依然として小さい)。
+
+一方で、どのモデルにおいても、⾜の速さ、シュートの精度、背の⾼さ、年齢、チームワークのよさなどの他の項の影響は、一部残るものの、ほぼ0、または、排除されていた。
+
+### 以下参考(LASSO回帰)
+
+```{r, echo = FALSE, include = FALSE}
+make_bootstrap_sample <- function(seed){
+  set.seed(seed)
+  bootstrap_sample <- dplyr::sample_n(Simulation_Data, size = 10000, replace = TRUE) |>
+    as.matrix()
+}
+bootstrap_sample1 <- make_bootstrap_sample(1)
+bootstrap_sample2 <- make_bootstrap_sample(2)
+bootstrap_sample3 <- make_bootstrap_sample(3)
+bootstrap_sample4 <- make_bootstrap_sample(4)
+bootstrap_sample5 <- make_bootstrap_sample(5)
+bootstrap_sample_list <- list(bootstrap_sample1, bootstrap_sample2,
+                              bootstrap_sample3, bootstrap_sample4,
+                              bootstrap_sample5)
+
+calculate_coefficients_Lasso <- function(sample, lambda){
+  coef(glmnet::glmnet(x = sample[, c("logX", "speed", "shoot", "height", "age", "teamwork")],
+                      y = sample[, "Y"],
+                      alpha = 1,
+                      lambda = lambda))
+}
+```
+
+#### (1) lmabda = 0.1
+
+```{r, echo = FALSE}
+purrr::map(bootstrap_sample_list, \(x) calculate_coefficients_Lasso(sample = x, lambda = 0.1))
+```
+
+#### (2) lmabda = 0.01
+
+```{r, echo = FALSE}
+purrr::map(bootstrap_sample_list, \(x) calculate_coefficients_Lasso(sample = x, lambda = 0.01))
+```
+
+#### (3) lmabda = 0.001
+
+```{r, echo = FALSE}
+purrr::map(bootstrap_sample_list, \(x) calculate_coefficients_Lasso(sample = x, lambda = 0.001))
+```
+
+
+#### optimal lambda
+
+```{r, echo = FALSE}
+find_optimal_lambda <- function(sample){
+  optimal_lambda <- glmnet::cv.glmnet(x = sample[, c("logX", "speed", "shoot",
+                                                     "height", "age", "teamwork")],
+                                      y = sample[, "Y"],
+                                      alpha = 1)
+  return(optimal_lambda$lambda.min)
+}
+optimal_lambda1 <- find_optimal_lambda(bootstrap_sample1)
+optimal_lambda2 <- find_optimal_lambda(bootstrap_sample2)
+optimal_lambda3 <- find_optimal_lambda(bootstrap_sample3)
+optimal_lambda4 <- find_optimal_lambda(bootstrap_sample4)
+optimal_lambda5 <- find_optimal_lambda(bootstrap_sample5)
+optimal_lambda_list <- list(optimal_lambda1, optimal_lambda2,
+                            optimal_lambda3, optimal_lambda4,
+                            optimal_lambda5)
+
+purrr::map2(bootstrap_sample_list, optimal_lambda_list,
+            \(x, y) calculate_coefficients_Lasso(sample = x, lambda = y))
+```
+
+
